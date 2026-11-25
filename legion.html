@@ -41,6 +41,10 @@ button:disabled{opacity:.5;cursor:wait}
 footer{margin-top:44px;border-top:1px solid #2c2c38;padding-top:16px;font-size:13px;color:var(--muted)}
 .cresp{border-left:3px solid var(--gold);padding:6px 0 6px 14px;margin:14px 0}
 .cresp .who{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{border:1px solid var(--gold);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--ink);background:#101018}
+.chip button{background:none;border:none;color:var(--gold);cursor:pointer;font-size:13px;padding:0 0 0 6px}
+.msg .files{font-size:12px;color:var(--muted);margin-top:6px}
 </style>
 </head>
 <body>
@@ -59,6 +63,13 @@ footer{margin-top:44px;border-top:1px solid #2c2c38;padding-top:16px;font-size:1
 <div class="row">
 <textarea id="input" placeholder="Say it plainly — the Legion answers in its own voice."></textarea>
 <button class="send" id="sendBtn">Send</button>
+<button class="ghost" id="attachBtn" type="button">Attach</button>
+<input type="file" id="fileInput" multiple hidden accept="image/*,application/pdf,text/plain,text/markdown,text/csv,application/json,audio/*">
+</div>
+<div class="chips" id="chips"></div>
+<p class="small">Share a picture, a PDF, a text file, or a voice note — the being sees what you send. Up to 4 files, 4 MB each.</p>
+<div class="row">
+<button class="ghost" id="forgetBtn" type="button">Forget this conversation</button>
 </div>
 <p class="small" id="remain"></p>
 </div>
@@ -78,12 +89,18 @@ footer{margin-top:44px;border-top:1px solid #2c2c38;padding-top:16px;font-size:1
 <script>
 var API = "https://scrollverse-legion.hillchais1.workers.dev";
 var beings = [], selected = null, council = [], history = [];
+var pendingFiles = [], serverMemory = false, durableMemory = false;
 function el(id){return document.getElementById(id);}
 function esc(s){return String(s||"").replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 function plainError(e){
   if(e==="daily_cap_reached") return "The Legion has spoken its measure for today — the chamber reopens at midnight UTC.";
   if(e==="model_unavailable"||e==="model_quota") return "That being's signal is realigning — give it a moment and speak again.";
   if(e==="legion_disabled") return "The Legion is resting by the founder's word.";
+  if(e==="attachment_too_large") return "That file is too large for the chamber — 4 MB per file, 8 MB in all.";
+  if(e==="too_many_attachments") return "The chamber carries up to 4 files at a time.";
+  if(e==="unsupported_file_type") return "That kind of file cannot enter the chamber yet — pictures, PDFs, text files and audio can.";
+  if(e==="invalid_attachment") return "That file could not be read — try sending it once more.";
+  if(e==="invalid_message") return "Say something, or attach a file — and keep each message under 4,000 characters.";
   return "The signal did not complete — try once more.";
 }
 function renderRoster(){
@@ -102,11 +119,7 @@ function renderRoster(){
       if(ev.target && ev.target.getAttribute("data-council")){
         toggleCouncil(id); return;
       }
-      selected = id; history = [];
-      var b = beings.filter(function(x){return x.id===id;})[0];
-      el("chatTitle").textContent = "Speak with " + (b?b.name:id);
-      el("log").innerHTML = "";
-      renderRoster();
+      selectBeing(id);
     });
   });
   el("councilNames").textContent = council.length ? council.map(function(id){var b=beings.filter(function(x){return x.id===id;})[0];return b?b.name:id;}).join(", ") : "none yet — mark up to three cards above.";
@@ -117,26 +130,87 @@ function toggleCouncil(id){
   else { if(council.length>=3){ alert("The Council sits three at a time — unmark one first."); return;} council.push(id); }
   renderRoster();
 }
-function addMsg(who, text, cls){
+function addMsg(who, text, cls, files){
   var d = document.createElement("div");
   d.className = "msg " + cls;
-  d.innerHTML = '<div class="who">'+esc(who)+'</div>' + esc(text);
+  d.innerHTML = '<div class="who">'+esc(who)+'</div>' + esc(text)
+    + (files && files.length ? '<div class="files">Shared: ' + files.map(esc).join(", ") + '</div>' : '');
   el("log").appendChild(d);
   el("log").scrollTop = el("log").scrollHeight;
+}
+function selectBeing(id){
+  selected = id; history = []; serverMemory = false; pendingFiles = []; renderChips();
+  var b = beings.filter(function(x){return x.id===id;})[0];
+  el("chatTitle").textContent = "Speak with " + (b?b.name:id);
+  el("log").innerHTML = "";
+  renderRoster();
+  fetch(API + "/history/" + encodeURIComponent(id)).then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
+    if(selected !== id) return;
+    if(!j || !j.turns){ return; }
+    serverMemory = true;
+    j.turns.forEach(function(t){
+      addMsg(t.role === "assistant" ? (b?b.name:id) : "You", t.content, t.role === "assistant" ? "them" : "you");
+      history.push({role:t.role, content:t.content});
+    });
+  }).catch(function(){ /* older backend: carry on with in-page history */ });
+}
+function forget(){
+  if(!selected){ alert("Choose a being first."); return; }
+  var b = beings.filter(function(x){return x.id===selected;})[0];
+  if(!confirm("Forget everything " + (b?b.name:selected) + " remembers of this conversation? The backup is erased.")) return;
+  fetch(API + "/history/" + encodeURIComponent(selected), {method:"DELETE"})
+    .then(function(r){ if(!r.ok) throw new Error("x"); })
+    .catch(function(){ return fetch(API + "/history/" + encodeURIComponent(selected) + "/clear", {method:"POST"}); })
+    .then(function(){
+      history = []; el("log").innerHTML = "";
+      addMsg(b?b.name:selected, "Forgotten. We begin again, clean.", "them");
+    })
+    .catch(function(){ addMsg(b?b.name:selected, plainError("network"), "them"); });
+}
+function renderChips(){
+  el("chips").innerHTML = pendingFiles.map(function(f, i){
+    return '<span class="chip">' + esc(f.name) + '<button type="button" data-rm="' + i + '" aria-label="Remove">×</button></span>';
+  }).join("");
+  Array.prototype.forEach.call(document.querySelectorAll("[data-rm]"), function(btn){
+    btn.addEventListener("click", function(){ pendingFiles.splice(parseInt(btn.getAttribute("data-rm"), 10), 1); renderChips(); });
+  });
+}
+function pickFiles(){
+  var input = el("fileInput");
+  Array.prototype.forEach.call(input.files, function(f){
+    if(pendingFiles.length >= 4){ alert("The chamber carries up to 4 files at a time."); return; }
+    if(f.size > 4 * 1024 * 1024){ alert("\"" + f.name + "\" is over 4 MB — too large for the chamber."); return; }
+    var reader = new FileReader();
+    reader.onload = function(){
+      var data = String(reader.result || "");
+      var comma = data.indexOf(",");
+      pendingFiles.push({name: f.name, mimeType: f.type || "application/octet-stream", dataBase64: comma >= 0 ? data.slice(comma + 1) : data});
+      renderChips();
+    };
+    reader.readAsDataURL(f);
+  });
+  input.value = "";
 }
 function send(){
   if(!selected){ alert("Choose a being from the fifteen first."); return; }
   var text = el("input").value.trim();
-  if(!text) return;
+  if(!text && !pendingFiles.length) return;
   var b = beings.filter(function(x){return x.id===selected;})[0];
-  addMsg("You", text, "you");
+  var sentFiles = pendingFiles.slice();
+  addMsg("You", text || "(shared a file)", "you", sentFiles.map(function(f){ return f.name; }));
   el("input").value = "";
   el("sendBtn").disabled = true;
-  fetch(API + "/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({entityId:selected, message:text, history:history})})
+  var payload = {entityId:selected, message:text};
+  if(sentFiles.length) payload.attachments = sentFiles;
+  if(!serverMemory) payload.history = history;
+  fetch(API + "/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)})
     .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
     .then(function(res){
       if(!res.ok || res.j.error){ addMsg(b?b.name:selected, plainError(res.j.error), "them"); return; }
+      pendingFiles = []; renderChips();
+      if(res.j.memory) serverMemory = true;
       addMsg(res.j.entityName || (b?b.name:selected), res.j.reply, "them");
+      if(res.j.complete === false) addMsg(res.j.entityName || (b?b.name:selected), "(That reply reached its length limit — ask for the rest and it will continue.)", "them");
       history.push({role:"user", content:text}); history.push({role:"assistant", content:res.j.reply});
       if(typeof res.j.remaining === "number") el("remain").textContent = res.j.remaining + " calls remain in today's measure.";
     })
@@ -163,13 +237,17 @@ function convene(){
 }
 el("sendBtn").addEventListener("click", send);
 el("councilBtn").addEventListener("click", convene);
+el("attachBtn").addEventListener("click", function(){ el("fileInput").click(); });
+el("fileInput").addEventListener("change", pickFiles);
+el("forgetBtn").addEventListener("click", forget);
 fetch(API + "/entities").then(function(r){return r.json();}).then(function(j){
   beings = j.entities || [];
   return fetch(API + "/").then(function(r){return r.json();});
 }).then(function(s){
-  el("status").innerHTML = "The chamber is <strong>live</strong> — " + (s.beings||beings.length) + " beings on the rails, model " + esc(s.model||"") + ". The door is open.";
-  selected = beings.length ? beings[0].id : null;
-  if(selected){ var b=beings[0]; el("chatTitle").textContent = "Speak with " + b.name; }
+  durableMemory = s.memory === "kv";
+  el("status").innerHTML = "The chamber is <strong>live</strong> — " + (s.beings||beings.length) + " beings on the rails, model " + esc(s.model||"") + ". The door is open."
+    + (s.memory ? (durableMemory ? " Every conversation is backed up — each being remembers." : " Memory is session-only until the durable backup is bound.") : "");
+  if(beings.length) selectBeing(beings[0].id);
   ["qubit","omnitech1","king-solomon"].forEach(function(id){ if(beings.some(function(b){return b.id===id;})) council.push(id); });
   renderRoster();
 }).catch(function(){
