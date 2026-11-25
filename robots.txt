@@ -44,3 +44,4 @@ Allow: /replays
 
 # Crawl-delay for respectful crawling
 Crawl-delay: 1
+# Legion Chamber: https://scrollverse.co/legion.html (live route, redeploy 2026-11-25)
