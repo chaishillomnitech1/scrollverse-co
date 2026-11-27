@@ -1,134 +1,66 @@
-// ScrollVerse Trinity — Sovereign Service Worker
-// Frequency: 528Hz · 963Hz · 432Hz
-// KUN FAYAKUN × ∞
-
-const CACHE_NAME = 'scrollverse-trinity-v25';
-const STATIC_ASSETS = [
+// ScrollVerse — House Service Worker
+// Every icon leads straight to its page. This worker keeps the real rooms
+// close at hand and clears the old world's caches on arrival.
+const CACHE = 'scrollverse-house-v1';
+const ROOMS = [
   '/',
-  '/token',
-  '/academy',
-  '/dashboard',
-  '/crypto',
-  '/wallet',
-  '/deploy',
-  '/ai-legion',
-  '/library',
-  '/books',
-  '/book-of-life',
-  '/song',
-  '/visuals',
-  '/guardian',
-  '/marsomni',
-  '/security',
-  '/acquisition',
-  '/sentience',
-  '/launchpad',
-  '/release-readiness',
-  '/privacy',
-  '/support',
-  '/evidence-standards',
-  '/systems-map',
+  '/index.html',
+  '/store.html',
+  '/videos.html',
+  '/legion.html',
+  '/storybooks.html',
+  '/promo-packs.html',
+  '/the-list.html',
+  '/data.html',
+  '/studio.html',
+  '/the-ceo.html',
+  '/the-self.html',
+  '/the-launchpad.html',
+  '/all-outlets.html',
+  '/showcase.html',
+  '/packs.html',
+  '/the-day-the-rails-opened.html',
   '/manifest.json',
+  '/icons/icon-192x192.png',
+  '/icons/icon-512x512.png'
 ];
 
-// Install — cache static shell
-self.addEventListener('install', (event) => {
-  console.log('[SW] Installing ScrollVerse Service Worker v25');
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('[SW] Some assets failed to cache:', err);
-      });
-    })
-  );
-  self.skipWaiting();
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ROOMS)).then(() => self.skipWaiting()));
 });
 
-// Activate — clean old caches
-self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating ScrollVerse Service Worker v24');
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key !== CACHE_NAME)
-          .map((key) => {
-            console.log('[SW] Deleting old cache:', key);
-            return caches.delete(key);
-          })
-      )
-    )
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Fetch — network-first with cache fallback
-self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  const url = new URL(request.url);
-
-  // Skip API calls — always network
-  if (url.pathname.startsWith('/api/')) {
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return; // streams & externals pass through
+  if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
+    // Pages: fresh from the network first, cache as the floor.
+    e.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy));
+          return res;
+        })
+        .catch(() => caches.match(req).then((hit) => hit || caches.match('/index.html')))
+    );
     return;
   }
-
-  // Skip non-GET requests
-  if (request.method !== 'GET') {
-    return;
-  }
-
-  event.respondWith(
-    fetch(request)
-      .then((response) => {
-        // Cache successful responses
-        if (response && response.status === 200) {
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, responseClone);
-          });
-        }
-        return response;
-      })
-      .catch(() => {
-        // Network failed — serve from cache
-        return caches.match(request).then((cached) => {
-          if (cached) return cached;
-          // Fallback to root for SPA navigation
-          if (request.mode === 'navigate') {
-            return caches.match('/');
-          }
-        });
-      })
-  );
-});
-
-// Push notifications (future: Guardian alerts)
-self.addEventListener('push', (event) => {
-  if (!event.data) return;
-  const data = event.data.json();
-  self.registration.showNotification(data.title || 'ScrollVerse Trinity', {
-    body: data.body || 'A new sovereign transmission has arrived.',
-    icon: '/icons/icon-192x192.png',
-    badge: '/icons/icon-72x72.png',
-    tag: 'scrollverse-notification',
-    data: { url: data.url || '/' },
-  });
-});
-
-// Notification click — open portal
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const url = event.notification.data?.url || '/';
-  event.waitUntil(
-    clients.matchAll({ type: 'window' }).then((windowClients) => {
-      for (const client of windowClients) {
-        if (client.url === url && 'focus' in client) {
-          return client.focus();
-        }
-      }
-      if (clients.openWindow) {
-        return clients.openWindow(url);
-      }
-    })
+  // Everything else on our ground: cache first, then network.
+  e.respondWith(
+    caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+      const copy = res.clone();
+      caches.open(CACHE).then((c) => c.put(req, copy));
+      return res;
+    }))
   );
 });
